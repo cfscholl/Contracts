@@ -56,7 +56,7 @@
   (if (has-->w? f)
       ; Peel off one layer (note that this the outer layer)
       (get-->-w f)
-      ; Otherwise wrap it once, this never get's removed
+      ; Otherwise wrap it once, this never gets removed
       ; anymore
       (chaperone-procedure* f wrapper)))
 
@@ -74,7 +74,7 @@
        (λ (result) (guard-multi/c rng result))
        (guard-multi/c dom arg)))))
 
-; This only happens at the inital guarding of a higher-order contract
+; This only happens at the initial guarding of a higher-order contract
 ; two cases are possible we guard an already contracted function
 ; or the function didn't have any contract over it
 (define (guard-f-ho/c f ctc pos neg)
@@ -91,7 +91,7 @@
     (if (pred val) val (blame pos))))
 
 ; Convert a higher-order contract to a multi-higher-order contract
-; Conversion consists of simultanously copying
+; Conversion consists of simultaneously copying
 ; the structure of the higher-order contract and propagating the
 ; blame labels to the leafs.
 ; At the leafs we convert flat/c to multi-flat/c
