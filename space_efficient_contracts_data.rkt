@@ -181,6 +181,12 @@
       multi
       (join-multi-ho/c multi  (get-->-c f))))
 
+
+(define (contractTimes f c n)
+  (if (= n 0)
+      f
+      (contractTimes (guard c f "positive" "negative") c (- n 1))))
+
 (module+ test
   (require (for-syntax racket/syntax syntax/parse))
   (require rackunit)
@@ -189,11 +195,7 @@
     (check-equal? 
      (with-handlers ([exn:fail?  (λ (exn) (exn-message  exn))])  e1)
      e2))
-  
-  (define (contractTimes f c n)
-    (if (= n 0)
-        f
-        (contractTimes (guard c f "positive" "negative") c (- n 1))))
+ 
 
   ; A contract to check positive numbers 
   (define pos (flat/c (lambda (x) (and (integer? x) (>= x 0)))))
@@ -234,3 +236,54 @@
   (check-equal? (length (multi-flat/c-flat/c-list domain/ci))  1)
   (check-equal? (length (multi-flat/c-flat/c-list range/ci))   1)  
   (println "If there is no red above it *might* be correct :) "))
+
+
+
+
+(require racket/contract/base)
+
+(define (cleanup)
+  (collect-garbage)
+  (collect-garbage)
+  (collect-garbage))
+
+(define fc
+  (contract
+   (-> integer? integer?)
+   (λ (x) x)
+   'pos 'neg))
+
+(define int? (flat/c (lambda (x) (integer? x))))
+(define fc-space-efficient
+  (guard
+   (ho/c int? int?)
+   (λ (x) x)
+   'pos 'neg))
+
+(define (apply-x-times f x)
+  (time
+   (for ([x (in-range x)])
+     (f 1))))
+
+(define ffc
+  (let loop ([n 10])
+    (cond
+      [(zero? n) (λ (x) x)]
+      [else (contract
+             (-> integer? integer?)
+             (loop (- n 1))
+             'pos 'neg)])))
+
+(define testSize 3000000)
+(printf "one layer of wrapping-racket \n")
+(cleanup)
+(apply-x-times fc testSize)
+(printf "one layer of wrapping-space \n")
+(cleanup)
+(apply-x-times fc-space-efficient testSize)
+(printf "ten layers of wrapping-racket \n")
+(cleanup)
+(apply-x-times ffc testSize)
+(cleanup)
+(printf "ten layers of wrapping-space \n")
+(apply-x-times (contractTimes fc-space-efficient (ho/c int? int?) 10) testSize)
