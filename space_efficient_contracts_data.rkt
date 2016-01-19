@@ -8,6 +8,7 @@
 ;
 ; Experiments for designing space-efficient contracts
 ; Christophe Scholliers, Christophe.Scholliers@UGent.be
+(require racket/contract/base)
 
 (define (blame x)  (error "Blaming " x)) 
 ; A structure to represent a flat contract
@@ -182,11 +183,6 @@
       (join-multi-ho/c multi  (get-->-c f))))
 
 
-(define (contractTimes f c n)
-  (if (= n 0)
-      f
-      (contractTimes (guard c f "positive" "negative") c (- n 1))))
-
 (module+ test
   (require (for-syntax racket/syntax syntax/parse))
   (require rackunit)
@@ -195,16 +191,96 @@
     (check-equal? 
      (with-handlers ([exn:fail?  (λ (exn) (exn-message  exn))])  e1)
      e2))
- 
+  
+  (define (contractTimes f c n)
+    (if (= n 0)
+        f
+        (contractTimes (guard c f "positive" "negative") c (- n 1))))
+  
+  (define (cleanup)
+    (collect-garbage)
+    (collect-garbage)
+    (collect-garbage))
+  
+  (define fc
+    (contract
+     (-> integer? integer?)
+     (λ (x) x)
+     'pos 'neg))
+  
+  (define int? (flat/c (lambda (x) (integer? x))))
+  (define fc-space-efficient
+    (guard
+     (ho/c int? int?)
+     (λ (x) x)
+     'pos 'neg))
+  
+  (define (apply-x-times f x)
+    (time
+     (for ([x (in-range x)])
+       (f 1))))
+  
+  (define ffc
+    (let loop ([n 10])
+      (cond
+        [(zero? n) (λ (x) x)]
+        [else (contract
+               (-> integer? integer?)
+               (loop (- n 1))
+               'pos 'neg)])))
+  
+  (define (benchmark)
+    (cleanup)
+    (define testSize 3000000)
+    (printf "one layer of wrapping-racket \n")
+    (cleanup)
+    (apply-x-times fc testSize)
+    (printf "one layer of wrapping-space \n")
+    (cleanup)
+    (apply-x-times fc-space-efficient testSize)
+    (printf "ten layers of wrapping-racket \n")
+    (cleanup)
+    (apply-x-times ffc testSize)
+    (cleanup)
+    (printf "ten layers of wrapping-space \n")
+    (apply-x-times (contractTimes fc-space-efficient (ho/c int? int?) 10) testSize))
+
+  (define (has-num-contracts? f x)
+    (check-equal? (has-->c? f) #t)
+    (let ([domain/c (multi-ho/c-dom (get-->-c f))]
+          [range/c (multi-ho/c-rng (get-->-c f))])
+      (check-equal? (length (multi-flat/c-proj-list domain/c))   x)
+      (check-equal? (length (multi-flat/c-proj-list range/c))    x)
+      (check-equal? (length (multi-flat/c-flat/c-list domain/c)) x)
+      (check-equal? (length (multi-flat/c-flat/c-list range/c))  x)))
 
   ; A contract to check positive numbers 
   (define pos (flat/c (lambda (x) (and (integer? x) (>= x 0)))))
   ; A function contract from pos -> pos
   (define pos->pos (ho/c pos pos))
+  ; A function contract from (pos->pos) -> pos
+  (define pos->pos->pos (ho/c pos->pos pos))
   ; creating a contracted function 
   (define guarded (guard pos->pos (lambda (x) (* x -2)) "positive" "negative"))
 
-  ; check whether it has a contract
+  (define f_1 (guard pos->pos->pos (lambda (f)
+                                     (check-equal? (has-->c? f) #t)
+                                     ; Check that the already contracted function only has one
+                                     ; contract
+                                     (has-num-contracts? f 1)
+                                     (f 1)) "pos" "neg"))
+
+  (define f_2 (guard pos->pos->pos (lambda (f)
+                                     (check-equal? (has-->c? f) #t)
+                                     ; Check that the already contracted function only has one
+                                     ; contract
+                                     (has-num-contracts? f 1)
+                                     (f -1)) "pos" "neg"))
+  
+  (check-blame (f_1 guarded) "Blaming  \"positive\"")
+  (check-blame (f_2 guarded) "Blaming  \"pos\"")
+  
+  ;check whether it has a contract
   (check-equal? (has-->c? guarded) #t)
   ; checking normal blame 
   (check-blame (guarded -34) "Blaming  \"negative\"")
@@ -219,71 +295,20 @@
   (check-blame (guarded-twice 34)  "Blaming  \"positive\"")
 
   ; Get the domain and range contract from the twice contracted function
-  (define domain/c (multi-ho/c-dom (get-->-c guarded-twice)))
-  (define range/c (multi-ho/c-rng (get-->-c guarded-twice)))
-  ; Check whether we have actually thrown away the implied contracts
-  (check-equal? (length (multi-flat/c-proj-list domain/c))   1)
-  (check-equal? (length (multi-flat/c-proj-list range/c))    1)
-  (check-equal? (length (multi-flat/c-flat/c-list domain/c)) 1)
-  (check-equal? (length (multi-flat/c-flat/c-list range/c))  1)
+  (has-num-contracts? guarded-twice 1)
   ; Apply the contract 1000 times 
   (define insanely-contracted (contractTimes guarded-twice pos->pos 1000))
-  (define domain/ci (multi-ho/c-dom (get-->-c insanely-contracted)))
-  (define range/ci (multi-ho/c-rng (get-->-c insanely-contracted)))
-  ; Check wether we have indeed thrown away the contracts 
-  (check-equal? (length (multi-flat/c-proj-list   domain/ci))  1)
-  (check-equal? (length (multi-flat/c-proj-list   range/ci))   1)
-  (check-equal? (length (multi-flat/c-flat/c-list domain/ci))  1)
-  (check-equal? (length (multi-flat/c-flat/c-list range/ci))   1)  
-  (println "If there is no red above it *might* be correct :) "))
+  (has-num-contracts? insanely-contracted 1)
+  (println "If there is no red above it *might* be correct :) " )
+  (benchmark))
 
 
 
 
-(require racket/contract/base)
 
-(define (cleanup)
-  (collect-garbage)
-  (collect-garbage)
-  (collect-garbage))
 
-(define fc
-  (contract
-   (-> integer? integer?)
-   (λ (x) x)
-   'pos 'neg))
 
-(define int? (flat/c (lambda (x) (integer? x))))
-(define fc-space-efficient
-  (guard
-   (ho/c int? int?)
-   (λ (x) x)
-   'pos 'neg))
 
-(define (apply-x-times f x)
-  (time
-   (for ([x (in-range x)])
-     (f 1))))
 
-(define ffc
-  (let loop ([n 10])
-    (cond
-      [(zero? n) (λ (x) x)]
-      [else (contract
-             (-> integer? integer?)
-             (loop (- n 1))
-             'pos 'neg)])))
 
-(define testSize 3000000)
-(printf "one layer of wrapping-racket \n")
-(cleanup)
-(apply-x-times fc testSize)
-(printf "one layer of wrapping-space \n")
-(cleanup)
-(apply-x-times fc-space-efficient testSize)
-(printf "ten layers of wrapping-racket \n")
-(cleanup)
-(apply-x-times ffc testSize)
-(cleanup)
-(printf "ten layers of wrapping-space \n")
-(apply-x-times (contractTimes fc-space-efficient (ho/c int? int?) 10) testSize)
+                          
