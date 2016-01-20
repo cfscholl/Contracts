@@ -9,6 +9,7 @@
 ; Experiments for designing space-efficient contracts
 ; Christophe Scholliers, Christophe.Scholliers@UGent.be
 (require racket/contract/base)
+(require racket/unsafe/ops)
 
 (define (blame x)  (error "Blaming " x)) 
 ; A structure to represent a flat contract
@@ -17,8 +18,10 @@
 ; ho/c : contract α × contract β → contract (α → β)
 (struct ho/c (dom rng))
 
-(struct multi-ho/c (dom rng pos))
-(struct multi-flat/c (proj-list flat/c-list))
+
+(struct faster        (apply))
+(struct multi-ho/c   faster  (dom rng pos))
+(struct multi-flat/c faster  (proj-list flat/c-list))
 
 ; Impersonator property for saving the contract
 (define-values (->-c has-->c? get-->-c)
@@ -46,7 +49,7 @@
            (let ([wrapped-once (get/build-wrapped-once val)]
                  [ctc-new (guard-f-ho/c val ctc pos neg)])
              ;TEST
-             (impersonate-procedure wrapped-once
+             (impersonate-procedure	 wrapped-once
                                    ;TEST
                                     (wrapper ctc-new)
                                     ->-w  wrapped-once
@@ -71,17 +74,18 @@
 ; contracts over a contracted function
 (define (wrapper ctc)
   ;Test
-  (λ (arg)
-    (let*  (;[ctc (get-->-c chap)]
-            [dom (multi-ho/c-dom ctc)]
-            [rng (multi-ho/c-rng ctc)])
+  (let*  (;[ctc (get-->-c chap)]
+          [dom (multi-ho/c-dom ctc)]
+          [rng (multi-ho/c-rng ctc)]
+          [dom-proj ((faster-apply dom) dom)]
+          [rng-proj ((faster-apply rng) rng)])
+    (λ (arg)
       (values
        ; creating a new lambda for each application is probably
        ; not such a great idea :D maybe we need to change
        ; the interface of chaperone-procedure* ?
-       (λ (result) (guard-multi/c rng result))
-       (guard-multi/c dom arg))
-      )))
+       (λ (result) (rng-proj result))
+       (dom-proj arg)))))
 
 ; This only happens at the initial guarding of a higher-order contract
 ; two cases are possible we guard an already contracted function
@@ -109,15 +113,18 @@
     ; the flat/c are replaced by a multi-flat/c
     [(flat/c? ctc)
      (multi-flat/c
+      apply-multi-flat
       (list (proj (flat/c-predicate ctc) pos))
       (list ctc))]
     ; copy structure and propagate blame
     [(ho/c? ctc)
      (let ([dom (ho/c-dom ctc)]
            [rng (ho/c-rng ctc)])
-       (multi-ho/c (ho/c->multi-ho/c dom neg pos)
-                   (ho/c->multi-ho/c rng pos neg)
-                   pos))]))
+       (multi-ho/c
+        apply-multi-ho 
+        (ho/c->multi-ho/c dom neg pos)
+        (ho/c->multi-ho/c rng pos neg)
+        pos))]))
 
 
 ; helper function for computing the join of two multi-flat contracts
@@ -142,13 +149,17 @@
          (filter (lambda (cp)
                    (not (implied-by-one? new-flat-list (car cp))))
                  (zip old-flat-list old-proj-list))])
-    (multi-flat/c (append new-proj-list (map car not-implied))
-                  (append new-flat-list (map cdr not-implied)))))
+    (multi-flat/c
+     apply-multi-flat
+     (append new-proj-list (map car not-implied))
+     (append new-flat-list (map cdr not-implied)))))
 
 ; join two multi-ho/c 
 (define (join-multi-ho/c new-multi old-multi)
   (if (multi-ho/c? old-multi)
-      (multi-ho/c (join-multi-ho/c (multi-ho/c-dom new-multi) (multi-ho/c-dom old-multi))
+      (multi-ho/c
+       apply-multi-ho
+       (join-multi-ho/c (multi-ho/c-dom new-multi) (multi-ho/c-dom old-multi))
                   (join-multi-ho/c (multi-ho/c-rng old-multi) (multi-ho/c-rng new-multi))
                   (multi-ho/c-pos new-multi))
       (multi-flat/c-join new-multi old-multi)))
@@ -161,26 +172,56 @@
 (define  (apply-proj-list proj-list val)
   (foldl (lambda (f v) (f v)) val proj-list))
 
-; Apply a multi contract over a value
-(define (guard-multi/c ctc val)
-  (cond
-    ; We are at the leafs apply the projection list
-    [(multi-flat/c? ctc)
-     (let ([proj-list (multi-flat/c-proj-list ctc)])
-       (apply-proj-list proj-list val))]
-    ; It is a higher-order multi-contract
-    [(multi-ho/c? ctc)
-     (let ([pos (multi-ho/c-pos ctc)])
-       ; return a chaperoned function (again joinable)
-       (if (procedure? val)
-           (let ([wrapped-once (get/build-wrapped-once val)]
-                 [ctc-multi (guard-f-multi/c val ctc)])
-             (impersonate-procedure wrapped-once
-                                   ;;TEST
-                                   (wrapper ctc-multi)
-                                   ->-w  wrapped-once
-                                   ->-c  ctc-multi))
-             (blame pos)))]))
+;
+(define apply-multi-flat
+  (lambda (ctc)
+    (let ([proj-list (multi-flat/c-proj-list ctc)])
+      (if (= (length proj-list) 1)
+          (car proj-list)
+          (lambda (val)
+            (apply-proj-list proj-list val))))))
+
+(define apply-multi-ho
+  (lambda (ctc)
+    (let ([pos (multi-ho/c-pos ctc)])
+      (lambda (val)
+        ; return a chaperoned function (again joinable)
+        (if (procedure? val)
+            (let ([wrapped-once (get/build-wrapped-once val)]
+                  [ctc-multi (guard-f-multi/c val ctc)])
+              (impersonate-procedure wrapped-once
+                                     ;;TEST
+                                     (wrapper ctc-multi)
+                                     ->-w  wrapped-once
+                                     ->-c  ctc-multi))
+            (blame pos))))))
+
+
+;; Apply a multi contract over a value
+;(define (guard-multi/c ctc val)
+;  (cond
+;    ; We are at the leafs apply the projection list
+;    [(multi-flat/c? ctc)
+;
+;     (let ([proj-list (multi-flat/c-proj-list ctc)])
+;       (apply-proj-list proj-list val))
+;
+;     ]
+;    ; It is a higher-order multi-contract
+;    [
+;     (multi-ho/c? ctc)
+;     (let ([pos (multi-ho/c-pos ctc)])
+;       ; return a chaperoned function (again joinable)
+;       (if (procedure? val)
+;           (let ([wrapped-once (get/build-wrapped-once val)]
+;                 [ctc-multi (guard-f-multi/c val ctc)])
+;             (impersonate-procedure wrapped-once
+;                                   ;;TEST
+;                                   (wrapper ctc-multi)
+;                                   ->-w  wrapped-once
+;                                   ->-c  ctc-multi))
+;             (blame pos)))
+;     ]))
 
 ; Guard a function f with a multi-ho/c
 ; either the function f is clean and does not
@@ -191,7 +232,6 @@
   (if (not (has-->c? f))
       multi
       (join-multi-ho/c multi  (get-->-c f))))
-
 
 (module+ test
   (require (for-syntax racket/syntax syntax/parse))
@@ -218,7 +258,8 @@
      (λ (x) x)
      'pos 'neg))
   
-  (define int? (flat/c (lambda (x) (integer? x))))
+  (define int? (flat/c  integer?))
+  
   (define fc-space-efficient
     (guard
      (ho/c int? int?)
@@ -257,7 +298,7 @@
     (printf "Creating ten layers of wrapping-space \n")
     (cleanup)
     (define fc-space-efficient-ten-times (time (contractTimes fc-space-efficient (ho/c int? int?) 10)))
-    (printf "Creating ten layers of wrapping-space \n")
+    (printf "ten layers of wrapping-space \n")
     (cleanup)
     (apply-x-times fc-space-efficient-ten-times testSize))
 
