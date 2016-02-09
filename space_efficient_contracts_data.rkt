@@ -134,8 +134,8 @@
          (filter (lambda (cp)
                    (not (implied-by-one? new-flat-list (car cp))))
                  (zip old-flat-list old-proj-list))])
-    (multi-flat/c (append new-proj-list (map car not-implied))
-                  (append new-flat-list (map cdr not-implied)))))
+    (multi-flat/c (append new-proj-list (map cdr not-implied))
+                  (append new-flat-list (map car not-implied)))))
 
 ; join two multi-ho/c 
 (define (join-multi-ho/c new-multi old-multi)
