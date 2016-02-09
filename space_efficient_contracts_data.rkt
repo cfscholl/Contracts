@@ -280,7 +280,7 @@
 
   (define i4 (ho/c (ho/c (flat/c integer?) (flat/c string?))
                    (ho/c (flat/c symbol?) (flat/c list?))))
-  (((guard i4 (lambda (x) x) "pos" "neg") add1) 'a)
+  (check-blame (((guard i4 (lambda (x) x) "pos" "neg") add1) 'a) "Blaming  \"pos\"")
   
   
   (check-blame (f_1 guarded) "Blaming  \"positive\"")
