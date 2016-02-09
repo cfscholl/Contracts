@@ -127,15 +127,15 @@
 ; join two multi-flat contracts
 (define (multi-flat/c-join new-multi old-multi)
   (let* ([new-proj-list (multi-flat/c-proj-list new-multi)]
-        [new-flat-list (multi-flat/c-flat/c-list new-multi)]
-        [old-proj-list (multi-flat/c-proj-list old-multi)]        
-        [old-flat-list (multi-flat/c-flat/c-list old-multi)]
-        [not-implied
-         (filter (lambda (cp)
-                   (not (implied-by-one? new-flat-list (car cp))))
-                 (zip old-flat-list old-proj-list))])
-    (multi-flat/c (append new-proj-list (map car not-implied))
-                  (append new-flat-list (map cdr not-implied)))))
+         [new-flat-list (multi-flat/c-flat/c-list new-multi)]
+         [old-proj-list (multi-flat/c-proj-list old-multi)]        
+         [old-flat-list (multi-flat/c-flat/c-list old-multi)]
+         [not-implied
+          (filter (lambda (cp)
+                    (not (implied-by-one? new-flat-list (car cp))))
+                  (zip old-flat-list old-proj-list))])
+    (multi-flat/c (append new-proj-list (map cdr not-implied))
+                  (append new-flat-list (map car not-implied)))))
 
 ; join two multi-ho/c 
 (define (join-multi-ho/c new-multi old-multi)
@@ -276,6 +276,12 @@
                                      ; contract
                                      (has-num-contracts? f 1)
                                      (f -1)) "pos" "neg"))
+
+
+  (define i4 (ho/c (ho/c (flat/c integer?) (flat/c string?))
+                   (ho/c (flat/c symbol?) (flat/c list?))))
+  (((guard i4 (lambda (x) x) "pos" "neg") add1) 'a)
+  
   
   (check-blame (f_1 guarded) "Blaming  \"positive\"")
   (check-blame (f_2 guarded) "Blaming  \"pos\"")
@@ -300,7 +306,8 @@
   (define insanely-contracted (contractTimes guarded-twice pos->pos 1000))
   (has-num-contracts? insanely-contracted 1)
   (println "If there is no red above it *might* be correct :) " )
-  (benchmark))
+  ;(benchmark)
+  )
 
 
 
