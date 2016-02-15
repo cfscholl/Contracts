@@ -14,10 +14,11 @@
 ; A structure to represent a flat contract
 ; flat/c : (α → boolean) → contract α
 (struct flat/c (predicate))
-; ho/c : contract α × contract β → contract (α → β)
-(struct ho/c (dom rng))
+; ho/c :contract fst x contract α × contract β → contract fst (α → β)
+;FST
+(struct ho/c (fst dom rng))
 
-(struct multi-ho/c (dom rng pos))
+(struct multi-ho/c   (fst dom rng pos      ))
 (struct multi-flat/c (proj-list flat/c-list))
 
 ; Impersonator property for saving the contract
@@ -39,9 +40,10 @@
     ; wrap the function so that we can later
     ; join the contract defined over it 
     [(ho/c? ctc)
-     (let ([dom (ho/c-dom ctc)]
+     (let ([fst (ho/c-fst ctc)]
+           [dom (ho/c-dom ctc)]
            [rng (ho/c-rng ctc)])
-       (if (procedure? val)
+       (if ((flat/c-predicate fst) val)
            ;return a *wrapped* function 
            (let ((wrapped-once (get/build-wrapped-once val)))
              (chaperone-procedure* wrapped-once
@@ -105,9 +107,11 @@
       (list ctc))]
     ; copy structure and propagate blame
     [(ho/c? ctc)
-     (let ([dom (ho/c-dom ctc)]
+     (let ([fst (ho/c-fst ctc)]
+           [dom (ho/c-dom ctc)]
            [rng (ho/c-rng ctc)])
-       (multi-ho/c (ho/c->multi-ho/c dom neg pos)
+       (multi-ho/c (multi-flat/c (list (proj (flat/c-predicate fst) pos)) (list fst))
+                   (ho/c->multi-ho/c dom neg pos)
                    (ho/c->multi-ho/c rng pos neg)
                    pos))]))
 
@@ -140,7 +144,8 @@
 ; join two multi-ho/c 
 (define (join-multi-ho/c new-multi old-multi)
   (if (multi-ho/c? old-multi)
-      (multi-ho/c (join-multi-ho/c (multi-ho/c-dom new-multi) (multi-ho/c-dom old-multi))
+      (multi-ho/c (multi-flat/c-join (multi-ho/c-fst new-multi) (multi-ho/c-fst old-multi))
+                  (join-multi-ho/c (multi-ho/c-dom new-multi) (multi-ho/c-dom old-multi))
                   (join-multi-ho/c (multi-ho/c-rng old-multi) (multi-ho/c-rng new-multi))
                   (multi-ho/c-pos new-multi))
       (multi-flat/c-join new-multi old-multi)))
@@ -162,9 +167,10 @@
        (apply-proj-list proj-list val))]
     ; It is a higher-order multi-contract
     [(multi-ho/c? ctc)
-     (let ([pos (multi-ho/c-pos ctc)])
+     (let ([pos (multi-ho/c-pos ctc)]
+           [fst-proj (multi-flat/c-proj-list (multi-ho/c-fst ctc))])
        ; return a chaperoned function (again joinable)
-       (if (procedure? val)
+       (if (apply-proj-list fst-proj val)
            (let ((wrapped-once (get/build-wrapped-once val)))
               (chaperone-procedure* wrapped-once
                                     #f
@@ -209,9 +215,15 @@
      'pos 'neg))
   
   (define int? (flat/c (lambda (x) (integer? x))))
+  (define fun? (flat/c (lambda (f) (procedure?  f))))
+  (define fail (flat/c (lambda (x) #f)))
+
+  
+
+  
   (define fc-space-efficient
     (guard
-     (ho/c int? int?)
+     (ho/c fun? int? int?)
      (λ (x) x)
      'pos 'neg))
   
@@ -257,11 +269,37 @@
   ; A contract to check positive numbers 
   (define pos (flat/c (lambda (x) (and (integer? x) (>= x 0)))))
   ; A function contract from pos -> pos
-  (define pos->pos (ho/c pos pos))
+  (define pos->pos (ho/c fun? pos pos))
   ; A function contract from (pos->pos) -> pos
-  (define pos->pos->pos (ho/c pos->pos pos))
+  (define pos->pos->pos (ho/c fun? pos->pos pos))
   ; creating a contracted function 
   (define guarded (guard pos->pos (lambda (x) (* x -2)) "positive" "negative"))
+
+
+  ; A function contract from pos -fail-> pos
+  (define pos-fail->pos (ho/c fail pos pos))
+
+  (define pos->pos-fail->pos (ho/c fun? pos pos-fail->pos))
+
+  (define pos-fail->pos->pos (ho/c fun? pos-fail->pos pos))
+
+  (define fail_f (guard pos->pos-fail->pos (lambda (x) (lambda (y) x)) "Pos" "Neg"))
+  (define double_fail_f (guard pos->pos-fail->pos fail_f "POSW" "NEGW"))
+
+
+
+  (define fail_f2 (guard pos-fail->pos->pos (lambda (f) (f 3)) "PosF2" "NegF2"))
+  (define double_fail_f2 (guard pos-fail->pos->pos (lambda (f) (f 3)) "PosF2W" "NegF2W"))
+
+
+  (check-blame (fail_f2 3) "Blaming  \"NegF2\"")
+  (check-blame (double_fail_f2 3) "Blaming  \"NegF2W\"")
+  
+  (check-blame (fail_f 2) "Blaming  \"Pos\"")
+  (check-blame (double_fail_f 2) "Blaming  \"Pos\"")
+
+  (check-blame (guard pos-fail->pos (lambda (x) x) "Pos" "Neg") "Blaming  \"Pos\"")
+
 
   (define f_1 (guard pos->pos->pos (lambda (f)
                                      (check-equal? (has-->c? f) #t)
@@ -278,10 +316,15 @@
                                      (f -1)) "pos" "neg"))
 
 
-  (define i4 (ho/c (ho/c (flat/c integer?) (flat/c string?))
-                   (ho/c (flat/c symbol?) (flat/c list?))))
-  (check-blame (((guard i4 (lambda (x) x) "pos" "neg") add1) 'a) "Blaming  \"pos\"")
+  (define i4 (ho/c fun?
+                   (ho/c fun? (flat/c integer?) (flat/c string?))
+                   (ho/c fun? (flat/c symbol?) (flat/c list?))))
+
   
+  (check-blame (((guard i4 (lambda (x) x) "pos" "neg") add1) 'a) "Blaming  \"pos\"")
+
+
+
   
   (check-blame (f_1 guarded) "Blaming  \"positive\"")
   (check-blame (f_2 guarded) "Blaming  \"pos\"")
