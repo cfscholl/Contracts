@@ -10,6 +10,7 @@
 ; Christophe Scholliers, Christophe.Scholliers@UGent.be
 (require racket/contract/base)
 
+
 (define (blame x)     (error "Blaming " x    )) 
 ; A structure to represent a flat contract
 ; flat/c : (α → boolean) → contract α
@@ -21,6 +22,14 @@
 (struct multi-dp/c    (fst dom rng pos       ))
 (struct multi-cg/c    (cg-list b-list        ))
 (struct multi-flat/c  (proj-list flat/c-list ))
+
+(define bla (lambda (x) x))
+
+
+
+;(define test (dp-contract (lambda (x) x) (lambda (y) (bla y))))
+;(define x  (cdr (cdr test)))
+;(define x2 (free-vars (expand-syntax #'(lambda (x) (+ x 2))) #:module-bound? #t))
 
 ; Impersonator property for saving the contract
 (define-values (->-c has-->c? get-->-c)
@@ -82,7 +91,7 @@
 ; This should be cleaned-up ...
 (define (apply-cg arg)
   (lambda (p result)
-    (let ([cg     (car p)]
+    (let ([cg     (caar p)]
           [blame  (cdr p)])
       (guard (cg arg) result (car blame) (cdr blame)))))
 
@@ -196,13 +205,31 @@
     (multi-flat/c (append new-proj-list (map cdr not-implied))
                   (append new-flat-list (map car not-implied)))))
 
-;TODO filter here ...
+
+ (require syntax/to-string)
+
+(define (implies-dp? cga cgb)
+  (let ([lam-a (car cga)]
+        [stx-a (cdr cga)]
+        [lam-b (car cgb)]
+        [stx-b (cdr cgb)])
+    (or (eq? lam-a lam-b)
+        (equal? stx-a stx-b))))
+        
+(define (dp-implied-by-one? cg-list cb)
+  (foldr (lambda (e a) (or (implies-dp? e cb) a)) #f cg-list))
+
 (define (join-multi-dp/c-rng a b)
   (let* ([cga       (multi-cg/c-cg-list a)]
          [b-list-a  (multi-cg/c-b-list  a)]
          [cgb       (multi-cg/c-cg-list b)]
-         [b-list-b  (multi-cg/c-b-list  b)])
-    (multi-cg/c (append cga cgb) (append b-list-a b-list-b))))
+         [b-list-b  (multi-cg/c-b-list  b)]
+         [not-implied
+          (filter (lambda (cp)
+                    (not (dp-implied-by-one? cga (car cp)) ))
+                  (zip cgb b-list-b))])
+    (multi-cg/c (append cga (map cdr not-implied))
+                (append b-list-a (map car not-implied)))))
 
 ; join two multi-ho/c 
 (define (join-multi/c new-multi old-multi)
@@ -261,9 +288,18 @@
       (join-multi/c multi  (get-->-c f))))
 
 
-(module+ test
+;(module+ test
   (require (for-syntax racket/syntax syntax/parse))
   (require rackunit)
+  
+  (require (for-syntax racket/match))
+  (require  syntax/free-vars)
+  
+  (define-syntax (dp-contract stx)
+    (match (syntax->list stx)
+      [(list fname fst domain rng)
+       (datum->syntax stx `(dp/c  ,fst ,domain (cons ,rng (expand-syntax #',rng))))]))
+  
   
   (define-syntax-rule (check-blame e1 e2)
     (check-equal? 
@@ -348,11 +384,13 @@
   ; A function contract from (pos->pos) -> pos
   (define pos->pos->pos (ho/c fun? pos->pos pos))
 
-  (define pos-d->pos (dp/c fun? pos (lambda (x) (if (< x 0) pos neg))))
+  (define pos-d->pos (dp-contract fun? pos  (lambda (x) (if (< x 0) pos neg))  ))
+  (define pos-d->pos2 (dp-contract fun? pos  (lambda (x) (if (< x 0) pos neg))  ))
+
   (define dep-f-test (contractTimes  (lambda (x) (* 1 x)) pos-d->pos 4))
 
 
-  (check-blame (dep-f-test 203)  "Blaming  \"positive\"")
+  (check-blame ((guard pos-d->pos2 dep-f-test "Pos2" "Neg2") 203)  "Blaming  \"positive\"")
   (check-blame (dep-f-test -203) "Blaming  \"negative\"")
 
   
@@ -432,4 +470,12 @@
   (has-num-contracts? insanely-contracted 1)
   (println "If there is no red above it *might* be correct :) " )
   ;(benchmark)
-  )
+ ; )
+
+
+
+
+  
+
+
+
